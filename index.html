@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rose of Leary Timer</title>
+  <meta name="description" content="Time elapsed since anyone at school last mentioned the Rose of Leary.">
+  <link rel="icon" href="assets/rose.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body class="public">
+  <main class="stage">
+    <!-- Leary's Rose: two axes (above/below, against/together) and eight sectors, drawn as an 8-petal rose curve -->
+    <svg class="rose" viewBox="-110 -110 220 220" aria-hidden="true" focusable="false">
+      <g class="rose-axes">
+        <circle r="100"/>
+        <line x1="0" y1="-100" x2="0" y2="100"/>
+        <line x1="-100" y1="0" x2="100" y2="0"/>
+        <line class="diag" x1="-70.7" y1="-70.7" x2="70.7" y2="70.7"/>
+        <line class="diag" x1="-70.7" y1="70.7" x2="70.7" y2="-70.7"/>
+      </g>
+      <path class="rose-fill" id="rose-fill"/>
+      <path class="rose-petals" id="rose-petals" pathLength="1"/>
+      <g class="rose-labels">
+        <text x="0" y="-104">ABOVE</text>
+        <text x="0" y="104">BELOW</text>
+        <text transform="translate(-104 0) rotate(-90)">AGAINST</text>
+        <text transform="translate(104 0) rotate(90)">TOGETHER</text>
+      </g>
+    </svg>
+
+    <div class="sign">
+      <p class="lead">It has been</p>
+      <div class="timer" role="timer" aria-live="off" aria-atomic="true">
+        <div class="unit days"><span class="num" data-num="d">–</span><span class="label" data-label="d">days</span></div>
+        <div class="unit"><span class="num" data-num="h">–</span><span class="label" data-label="h">hours</span></div>
+        <div class="unit"><span class="num" data-num="m">–</span><span class="label" data-label="m">minutes</span></div>
+        <div class="unit"><span class="num" data-num="s">–</span><span class="label" data-label="s">seconds</span></div>
+      </div>
+      <h1 class="since">since anyone at school mentioned <em>the&nbsp;Rose of&nbsp;Leary</em></h1>
+      <p class="status" id="status" hidden></p>
+    </div>
+  </main>
+
+  <script>
+  (() => {
+    const REFRESH_MS = 60 * 1000;
+    const CACHE_KEY = 'rose-of-leary:lastMentioned';
+    const UNITS = {
+      d: ['day', 'days'],
+      h: ['hour', 'hours'],
+      m: ['minute', 'minutes'],
+      s: ['second', 'seconds'],
+    };
+
+    const nums = {};
+    const labels = {};
+    document.querySelectorAll('[data-num]').forEach(el => { nums[el.dataset.num] = el; });
+    document.querySelectorAll('[data-label]').forEach(el => { labels[el.dataset.label] = el; });
+    const statusEl = document.getElementById('status');
+
+    let last = null;
+    let tick = null;
+    let shownTitle = '';
+
+    drawRose();
+    load();
+    setInterval(load, REFRESH_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) { load(); render(); }
+    });
+
+    function load() {
+      fetch('data.json?t=' + Date.now(), { cache: 'no-store' })
+        .then(res => {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(data => {
+          const t = Date.parse(data.lastMentioned);
+          if (Number.isNaN(t)) throw new Error('Invalid date');
+          try { localStorage.setItem(CACHE_KEY, String(t)); } catch (e) {}
+          statusEl.hidden = true;
+          setLast(t);
+        })
+        .catch(() => {
+          if (last !== null) return;
+          let cached = NaN;
+          try { cached = Number(localStorage.getItem(CACHE_KEY)); } catch (e) {}
+          if (cached > 0) {
+            setLast(cached);
+          } else {
+            statusEl.textContent = 'The timer could not be loaded. Trying again in a minute…';
+            statusEl.hidden = false;
+          }
+        });
+    }
+
+    function setLast(t) {
+      if (t === last) return;
+      last = t;
+      render();
+    }
+
+    function render() {
+      clearTimeout(tick);
+      if (last === null) return;
+      const elapsed = Math.max(0, Date.now() - last);
+      const total = Math.floor(elapsed / 1000);
+      const parts = {
+        d: Math.floor(total / 86400),
+        h: Math.floor((total % 86400) / 3600),
+        m: Math.floor((total % 3600) / 60),
+        s: total % 60,
+      };
+      for (const key in parts) {
+        const value = parts[key];
+        const text = key === 'd' ? String(value) : String(value).padStart(2, '0');
+        if (nums[key].textContent !== text) nums[key].textContent = text;
+        labels[key].textContent = UNITS[key][value === 1 ? 0 : 1];
+      }
+      const title = `${parts.d}d ${parts.h}h ${parts.m}m · Rose of Leary`;
+      if (title !== shownTitle) { document.title = title; shownTitle = title; }
+      tick = setTimeout(render, 1000 - (elapsed % 1000) + 10);
+    }
+
+    // r = cos(4θ) traces eight petals; turning it 22.5° puts one petal in each sector of the rose.
+    function drawRose() {
+      const steps = 480, radius = 96, turn = Math.PI / 8;
+      let d = '';
+      for (let i = 0; i < steps; i++) {
+        const theta = (i / steps) * 2 * Math.PI;
+        const r = radius * Math.cos(4 * theta);
+        d += (i ? 'L' : 'M') + (r * Math.cos(theta + turn)).toFixed(2) + ' ' + (r * Math.sin(theta + turn)).toFixed(2);
+      }
+      d += 'Z';
+      document.getElementById('rose-fill').setAttribute('d', d);
+      document.getElementById('rose-petals').setAttribute('d', d);
+    }
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Rose of Leary Admin</title>
+  <link rel="icon" href="assets/rose.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body class="admin">
+  <div class="wrap">
+    <header class="admin-head">
+      <a class="brand" href="./"><img src="assets/rose.svg" alt="">Rose of Leary</a>
+      <span class="tag">Admin</span>
+      <a class="view-link" href="./" target="_blank" rel="noopener">Open public page ↗</a>
+    </header>
+
+    <div class="notice" id="setup-notice" hidden>
+      One-time setup: connect this page to GitHub so it can update the timer.
+      <a href="#settings">Set it up below</a>.
+    </div>
+
+    <section class="card" aria-labelledby="current-title">
+      <h2 class="card-title" id="current-title">Time since last mention</h2>
+      <p class="big-elapsed" id="elapsed">–</p>
+      <p class="muted small" id="last-date" style="margin:0">Loading…</p>
+    </section>
+
+    <section class="card" aria-label="Log a mention">
+      <div class="field">
+        <label for="note">Note <span class="muted">(optional, only shown on this page)</span></label>
+        <input id="note" type="text" maxlength="140" placeholder="e.g. Staff meeting, Tuesday briefing">
+      </div>
+      <button class="btn primary big" id="now-btn" type="button">It was just mentioned</button>
+      <details class="earlier">
+        <summary>It was mentioned at another time…</summary>
+        <div class="row">
+          <input type="datetime-local" id="when" aria-label="Date and time of the mention">
+          <button class="btn" id="when-btn" type="button">Log this time</button>
+        </div>
+      </details>
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="log-title">
+      <div class="card-head">
+        <h2 class="card-title" id="log-title">Mentions log</h2>
+        <span class="muted small" id="count"></span>
+      </div>
+      <ol class="log" id="log"></ol>
+    </section>
+
+    <section class="card" id="settings" aria-labelledby="settings-title">
+      <details id="settings-details">
+        <summary><span class="card-title" id="settings-title" style="display:inline">Connection to GitHub</span> <span class="muted small" id="conn-state"></span></summary>
+        <div style="margin-top:14px">
+          <p class="small" style="margin-top:0">This page saves the timer by updating <code>data.json</code> in your GitHub repository. It needs an access token for that. Create one like this:</p>
+          <ol class="steps">
+            <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → new fine-grained token</a>.</li>
+            <li>Name it <code>Rose of Leary admin</code> and pick an expiration.</li>
+            <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick <code id="repo-hint">this repository</code>.</li>
+            <li>Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>.</li>
+            <li>Click <b>Generate token</b>, copy it and paste it below.</li>
+          </ol>
+          <div class="field">
+            <label for="repo">Repository</label>
+            <input id="repo" type="text" placeholder="username/repository" autocomplete="off" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="token">Access token</label>
+            <input id="token" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="row">
+            <button class="btn primary" id="connect-btn" type="button">Save and connect</button>
+            <button class="btn" id="forget-btn" type="button">Forget on this device</button>
+          </div>
+          <p class="msg" id="settings-msg" role="status" aria-live="polite"></p>
+          <p class="muted small" style="margin-bottom:0">The token is stored only in this browser. Visitors can open this page, but without your token they can't change anything.</p>
+        </div>
+      </details>
+    </section>
+  </div>
+
+  <script>
+  (() => {
+    const FILE = 'data.json';
+    const SETTINGS_KEY = 'rose-of-leary:admin';
+    const API = 'https://api.github.com';
+
+    const $ = id => document.getElementById(id);
+    const els = {
+      notice: $('setup-notice'), elapsed: $('elapsed'), lastDate: $('last-date'),
+      note: $('note'), nowBtn: $('now-btn'), when: $('when'), whenBtn: $('when-btn'), msg: $('msg'),
+      log: $('log'), count: $('count'),
+      details: $('settings-details'), connState: $('conn-state'), repo: $('repo'), repoHint: $('repo-hint'),
+      token: $('token'), connectBtn: $('connect-btn'), forgetBtn: $('forget-btn'), settingsMsg: $('settings-msg'),
+    };
+
+    const dateFmt = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+
+    let settings = loadSettings();
+    let connected = false;
+    let busy = false;
+    let data = null;
+    let tick = null;
+
+    els.repo.value = settings.repo;
+    els.token.value = settings.token;
+    els.repoHint.textContent = settings.repo || 'this repository';
+    resetWhen();
+
+    els.nowBtn.addEventListener('click', () => logMention(new Date()));
+    els.whenBtn.addEventListener('click', () => {
+      const when = new Date(els.when.value);
+      if (Number.isNaN(when.getTime())) return say('Pick a date and time first.', 'err');
+      if (when.getTime() > Date.now() + 60 * 1000) return say("That's in the future. Pick a time that already happened.", 'err');
+      logMention(when);
+    });
+    els.connectBtn.addEventListener('click', connect);
+    els.forgetBtn.addEventListener('click', () => {
+      settings = { repo: settings.repo, token: '' };
+      saveSettings();
+      els.token.value = '';
+      connected = false;
+      sayIn(els.settingsMsg, 'Token removed from this browser.', 'ok');
+      refreshUi();
+    });
+    els.repo.addEventListener('input', () => { els.repoHint.textContent = els.repo.value.trim() || 'this repository'; });
+
+    start();
+
+    async function start() {
+      if (settings.repo && settings.token) {
+        try {
+          data = (await readRemote()).data;
+          connected = true;
+        } catch (err) {
+          sayIn(els.settingsMsg, err.message, 'err');
+        }
+      }
+      if (!data) {
+        try {
+          const res = await fetch(FILE + '?t=' + Date.now(), { cache: 'no-store' });
+          if (res.ok) data = normalize(await res.json());
+        } catch (e) {}
+      }
+      refreshUi();
+    }
+
+    // ---------- GitHub ----------
+
+    function headers() {
+      return {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': 'Bearer ' + settings.token,
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+    }
+
+    function contentsUrl() {
+      return `${API}/repos/${settings.repo}/contents/${FILE}`;
+    }
+
+    async function readRemote() {
+      let res;
+      try {
+        res = await fetch(contentsUrl(), { headers: headers(), cache: 'no-store' });
+      } catch (e) {
+        throw new Error("Couldn't reach GitHub. Check your internet connection.");
+      }
+      if (!res.ok) throw new Error(await explain(res));
+      const file = await res.json();
+      return { data: normalize(JSON.parse(fromBase64(file.content))), sha: file.sha };
+    }
+
+    // Reads the latest file, applies `change`, and commits it. Retries once if someone else saved in between.
+    async function writeRemote(change, message) {
+      for (let attempt = 0; ; attempt++) {
+        const { data: current, sha } = await readRemote();
+        const next = normalize(change(current));
+        let res;
+        try {
+          res = await fetch(contentsUrl(), {
+            method: 'PUT',
+            headers: headers(),
+            body: JSON.stringify({ message, sha, content: toBase64(JSON.stringify(next, null, 2) + '\n') }),
+          });
+        } catch (e) {
+          throw new Error("Couldn't reach GitHub. Check your internet connection.");
+        }
+        if (res.ok) return next;
+        if ((res.status === 409 || res.status === 422) && attempt === 0) continue;
+        throw new Error(await explain(res));
+      }
+    }
+
+    async function explain(res) {
+      let detail = '';
+      try { detail = (await res.json()).message || ''; } catch (e) {}
+      switch (res.status) {
+        case 401: return "GitHub didn't accept the token. Check that you copied all of it and that it hasn't expired.";
+        case 403: return `This token isn't allowed to change ${settings.repo}. Give it "Contents: Read and write" access to that repository.`;
+        case 404: return `Couldn't find ${FILE} in ${settings.repo}. Check the repository name, and that the token has access to it.`;
+        case 409:
+        case 422: return 'Someone saved at the same moment. Please try again.';
+        default: return `GitHub returned an error (${res.status}${detail ? ': ' + detail : ''}).`;
+      }
+    }
+
+    function toBase64(text) {
+      let bin = '';
+      new TextEncoder().encode(text).forEach(b => { bin += String.fromCharCode(b); });
+      return btoa(bin);
+    }
+
+    function fromBase64(b64) {
+      const bin = atob(b64.replace(/\s/g, ''));
+      return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+    }
+
+    // ---------- Data ----------
+
+    // The log is the source of truth; the public timer counts from its newest entry.
+    function normalize(raw) {
+      const history = Array.isArray(raw.history) ? raw.history.filter(m => m && !Number.isNaN(Date.parse(m.at))) : [];
+      if (!history.length && raw.lastMentioned) history.push({ at: raw.lastMentioned });
+      history.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+      return { lastMentioned: history.length ? history[0].at : raw.lastMentioned, history };
+    }
+
+    async function logMention(when) {
+      if (!connected || busy) return;
+      const note = els.note.value.trim();
+      const entry = { at: when.toISOString() };
+      if (note) entry.note = note;
+      const wasLatest = !data || !data.lastMentioned || Date.parse(entry.at) >= Date.parse(data.lastMentioned);
+
+      await save(
+        d => ({ ...d, history: [entry, ...d.history] }),
+        'Rose of Leary mentioned' + (note ? ': ' + note : ''),
+        () => {
+          els.note.value = '';
+          resetWhen();
+          const text = wasLatest
+            ? 'Logged. The public timer restarts within about a minute.'
+            : 'Logged. There is a more recent mention, so the timer keeps counting from that one.';
+          say(text, 'ok', { label: 'Undo', run: () => removeMention(entry.at, true) });
+        },
+      );
+    }
+
+    async function removeMention(at, isUndo) {
+      if (!connected || busy || !data) return;
+      if (data.history.length <= 1) return say("The log needs at least one mention, so this one can't be removed.", 'err');
+      if (!isUndo && !confirm(`Remove the mention from ${dateFmt.format(new Date(at))}?`)) return;
+      await save(
+        d => {
+          const i = d.history.findIndex(m => m.at === at);
+          return i === -1 ? d : { ...d, history: d.history.filter((_, j) => j !== i) };
+        },
+        'Remove Rose of Leary mention',
+        () => say(isUndo ? 'Undone.' : 'Mention removed.', 'ok'),
+      );
+    }
+
+    async function save(change, message, onDone) {
+      busy = true;
+      refreshUi();
+      say('Saving…');
+      try {
+        data = await writeRemote(change, message);
+        onDone();
+      } catch (err) {
+        say(err.message, 'err');
+      } finally {
+        busy = false;
+        refreshUi();
+      }
+    }
+
+    // ---------- Settings ----------
+
+    function loadSettings() {
+      let stored = {};
+      try { stored = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) {}
+      return { repo: stored.repo || guessRepo(), token: stored.token || '' };
+    }
+
+    function saveSettings() {
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+    }
+
+    // On GitHub Pages the address is username.github.io/repository/…
+    function guessRepo() {
+      const host = location.hostname;
+      if (!host.endsWith('.github.io')) return '';
+      const owner = host.slice(0, -'.github.io'.length);
+      const first = location.pathname.split('/').filter(Boolean)[0];
+      return owner + '/' + (first && !first.endsWith('.html') ? first : host);
+    }
+
+    async function connect() {
+      const repo = els.repo.value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$|\/$/g, '');
+      const token = els.token.value.trim();
+      if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return sayIn(els.settingsMsg, 'Enter the repository as username/repository.', 'err');
+      if (!token) return sayIn(els.settingsMsg, 'Paste your access token first.', 'err');
+
+      settings = { repo, token };
+      els.repo.value = repo;
+      els.connectBtn.disabled = true;
+      sayIn(els.settingsMsg, 'Checking…');
+      try {
+        data = (await readRemote()).data;
+        connected = true;
+        saveSettings();
+        sayIn(els.settingsMsg, 'Connected. You can log mentions now.', 'ok');
+        els.details.open = false;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (err) {
+        connected = false;
+        sayIn(els.settingsMsg, err.message, 'err');
+      } finally {
+        els.connectBtn.disabled = false;
+        refreshUi();
+      }
+    }
+
+    // ---------- UI ----------
+
+    function refreshUi() {
+      els.notice.hidden = connected;
+      els.connState.textContent = connected ? `· connected to ${settings.repo}` : '· not connected';
+      if (!connected && !els.details.dataset.touched) els.details.open = true;
+      els.details.dataset.touched = '1';
+      [els.nowBtn, els.whenBtn, els.note, els.when].forEach(el => { el.disabled = !connected || busy; });
+      renderCurrent();
+      renderLog();
+    }
+
+    function renderCurrent() {
+      clearTimeout(tick);
+      if (!data || !data.lastMentioned) {
+        els.elapsed.textContent = '–';
+        els.lastDate.textContent = data ? 'No mentions logged yet.' : "Couldn't load the current timer.";
+        return;
+      }
+      const last = Date.parse(data.lastMentioned);
+      const elapsed = Math.max(0, Date.now() - last);
+      els.elapsed.textContent = formatClock(elapsed);
+      els.lastDate.textContent = 'Last mentioned ' + dateFmt.format(new Date(last));
+      tick = setTimeout(renderCurrent, 1000 - (elapsed % 1000) + 10);
+    }
+
+    function renderLog() {
+      els.log.replaceChildren();
+      if (!data) { els.count.textContent = ''; return; }
+      const list = data.history;
+      els.count.textContent = list.length === 1 ? '1 mention' : `${list.length} mentions`;
+      list.forEach((m, i) => {
+        const li = document.createElement('li');
+
+        const when = document.createElement('span');
+        when.className = 'when';
+        when.textContent = dateFmt.format(new Date(m.at));
+        if (i === 0) {
+          const pill = document.createElement('span');
+          pill.className = 'current-pill';
+          pill.textContent = 'Latest';
+          when.append(pill);
+        }
+        li.append(when);
+
+        if (m.note) {
+          const note = document.createElement('span');
+          note.className = 'note';
+          note.textContent = m.note;
+          li.append(note);
+        }
+
+        const older = list[i + 1];
+        if (older) {
+          const gap = document.createElement('span');
+          gap.className = 'gap';
+          gap.textContent = formatGap(Date.parse(m.at) - Date.parse(older.at)) + ' after the previous one';
+          li.append(gap);
+        }
+
+        if (connected && list.length > 1) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'btn remove';
+          remove.textContent = 'Remove';
+          remove.disabled = busy;
+          remove.setAttribute('aria-label', 'Remove mention from ' + when.textContent);
+          remove.addEventListener('click', () => removeMention(m.at, false));
+          li.append(remove);
+        }
+        els.log.append(li);
+      });
+    }
+
+    function say(text, kind, action) { sayIn(els.msg, text, kind, action); }
+
+    function sayIn(el, text, kind, action) {
+      el.className = 'msg' + (kind ? ' ' + kind : '');
+      el.textContent = text;
+      if (action) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn link';
+        btn.style.marginLeft = '8px';
+        btn.textContent = action.label;
+        btn.addEventListener('click', action.run, { once: true });
+        el.append(btn);
+      }
+    }
+
+    function resetWhen() {
+      const now = new Date();
+      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      els.when.value = local;
+      els.when.max = local;
+    }
+
+    function formatClock(ms) {
+      const t = Math.floor(ms / 1000);
+      const d = Math.floor(t / 86400);
+      const pad = n => String(n).padStart(2, '0');
+      const hms = `${pad(Math.floor((t % 86400) / 3600))}h ${pad(Math.floor((t % 3600) / 60))}m ${pad(t % 60)}s`;
+      return d ? `${d}d ${hms}` : hms;
+    }
+
+    function formatGap(ms) {
+      const mins = Math.round(ms / 60000);
+      if (mins < 60) return mins === 1 ? '1 minute' : `${mins} minutes`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 48) return `${hours}h ${mins % 60}m`;
+      const days = Math.floor(hours / 24);
+      return `${days} days ${hours % 24}h`;
+    }
+  })();
+  </script>
+</body>
+</html>

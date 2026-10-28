@@ -248,7 +248,7 @@
           els.note.value = '';
           resetWhen();
           const text = wasLatest
-            ? 'Logged. The public timer restarts within about a minute.'
+            ? 'Logged. The public timer restarts within a minute or two.'
             : 'Logged. There is a more recent mention, so the timer keeps counting from that one.';
           say(text, 'ok', { label: 'Undo', run: () => removeMention(entry.at, true) });
         },

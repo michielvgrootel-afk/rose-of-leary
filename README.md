@@ -8,7 +8,7 @@ A tiny static site that shows how long it has been since anyone at school mentio
 
 ## How saving works
 
-The site is hosted on GitHub Pages, which only serves static files. The admin page saves by committing a new `data.json` through the GitHub API, using a fine-grained access token that you paste into the admin page once. The token stays in that browser's local storage. After a save, GitHub Pages redeploys and the public timer picks up the change within about a minute.
+The site is hosted on GitHub Pages, which only serves static files. The admin page saves by committing a new `data.json` through the GitHub API, using a fine-grained access token that you paste into the admin page once. The token stays in that browser's local storage. After a save, GitHub Pages redeploys and the public timer picks up the change within a minute or two.
 
 ### Creating the token
 
